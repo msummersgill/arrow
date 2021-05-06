@@ -66,7 +66,8 @@ if _gc_enabled:
 
 from pyarrow.lib import (BuildInfo, RuntimeInfo, VersionInfo,
                          cpp_build_info, cpp_version, cpp_version_info,
-                         runtime_info, cpu_count, set_cpu_count)
+                         runtime_info, cpu_count, set_cpu_count,
+                         enable_signal_handlers)
 
 
 def show_versions():
@@ -163,21 +164,24 @@ from pyarrow.lib import (MemoryPool, LoggingMemoryPool, ProxyMemoryPool,
                          log_memory_allocations, jemalloc_set_decay_ms)
 
 # I/O
-from pyarrow.lib import (HdfsFile, NativeFile, PythonFile,
+from pyarrow.lib import (NativeFile, PythonFile,
                          BufferedInputStream, BufferedOutputStream,
                          CompressedInputStream, CompressedOutputStream,
                          TransformInputStream, transcoding_input_stream,
                          FixedSizeBufferWriter,
                          BufferReader, BufferOutputStream,
                          OSFile, MemoryMappedFile, memory_map,
-                         create_memory_map, have_libhdfs,
-                         MockOutputStream, input_stream, output_stream)
+                         create_memory_map, MockOutputStream,
+                         input_stream, output_stream)
+
+from pyarrow._hdfsio import HdfsFile, have_libhdfs
 
 from pyarrow.lib import (ChunkedArray, RecordBatch, Table, table,
                          concat_arrays, concat_tables)
 
 # Exceptions
-from pyarrow.lib import (ArrowCapacityError,
+from pyarrow.lib import (ArrowCancelled,
+                         ArrowCapacityError,
                          ArrowException,
                          ArrowKeyError,
                          ArrowIndexError,

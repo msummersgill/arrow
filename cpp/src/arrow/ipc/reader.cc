@@ -885,7 +885,7 @@ class RecordBatchStreamReaderImpl : public RecordBatchStreamReader {
 
     // TODO(wesm): In future, we may want to reconcile the ids in the stream with
     // those found in the schema
-    const auto num_dicts = dictionary_memo_.fields().num_fields();
+    const auto num_dicts = dictionary_memo_.fields().num_dicts();
     for (int i = 0; i < num_dicts; ++i) {
       ARROW_ASSIGN_OR_RAISE(message, ReadNextMessage());
       if (!message) {
@@ -993,6 +993,25 @@ class RecordBatchFileReaderImpl : public RecordBatchFileReader {
                                           field_inclusion_mask_, context, reader.get()));
     ++stats_.num_record_batches;
     return batch;
+  }
+
+  Result<int64_t> CountRows() override {
+    int64_t total = 0;
+    for (int i = 0; i < num_record_batches(); i++) {
+      ARROW_ASSIGN_OR_RAISE(auto outer_message,
+                            ReadMessageFromBlock(GetRecordBatchBlock(i)));
+      auto metadata = outer_message->metadata();
+      const flatbuf::Message* message = nullptr;
+      RETURN_NOT_OK(
+          internal::VerifyMessage(metadata->data(), metadata->size(), &message));
+      auto batch = message->header_as_RecordBatch();
+      if (batch == nullptr) {
+        return Status::IOError(
+            "Header-type of flatbuffer-encoded Message is not RecordBatch.");
+      }
+      total += batch->length();
+    }
+    return total;
   }
 
   Status Open(const std::shared_ptr<io::RandomAccessFile>& file, int64_t footer_offset,

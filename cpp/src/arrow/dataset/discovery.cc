@@ -28,14 +28,13 @@
 #include "arrow/dataset/file_base.h"
 #include "arrow/dataset/partition.h"
 #include "arrow/dataset/type_fwd.h"
-#include "arrow/filesystem/path_forest.h"
 #include "arrow/filesystem/path_util.h"
 #include "arrow/util/logging.h"
 
 namespace arrow {
 namespace dataset {
 
-DatasetFactory::DatasetFactory() : root_partition_(literal(true)) {}
+DatasetFactory::DatasetFactory() : root_partition_(compute::literal(true)) {}
 
 Result<std::shared_ptr<Schema>> DatasetFactory::Inspect(InspectOptions options) {
   ARROW_ASSIGN_OR_RAISE(auto schemas, InspectSchemas(std::move(options)));

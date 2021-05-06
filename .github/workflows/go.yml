@@ -42,10 +42,11 @@ jobs:
     name: AMD64 Debian 10 Go ${{ matrix.go }}
     runs-on: ubuntu-latest
     if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        go: [1.12]
+        go: [1.15]
     env:
       GO: ${{ matrix.go }}
     steps:
@@ -74,10 +75,11 @@ jobs:
     name: AMD64 Windows 2019 Go ${{ matrix.go }}
     runs-on: windows-latest
     if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        go: [1.12]
+        go: [1.15]
     steps:
       - name: Install go
         uses: actions/setup-go@v1
@@ -101,10 +103,11 @@ jobs:
     name: AMD64 MacOS 10.15 Go ${{ matrix.go }}
     runs-on: macos-latest
     if: ${{ !contains(github.event.pull_request.title, 'WIP') }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        go: [1.12]
+        go: [1.15]
     steps:
       - name: Install go
         uses: actions/setup-go@v1

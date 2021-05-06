@@ -35,16 +35,27 @@
 #include <arrow/c/abi.h>
 #include <arrow/compute/type_fwd.h>
 #include <arrow/csv/type_fwd.h>
+
+#if defined(ARROW_R_WITH_DATASET)
 #include <arrow/dataset/type_fwd.h>
+#endif
+
 #include <arrow/filesystem/type_fwd.h>
 #include <arrow/io/type_fwd.h>
 #include <arrow/ipc/type_fwd.h>
 #include <arrow/json/type_fwd.h>
 #include <arrow/type_fwd.h>
 #include <arrow/util/type_fwd.h>
-#include <parquet/type_fwd.h>
 
+#if defined(ARROW_R_WITH_PARQUET)
+#include <parquet/type_fwd.h>
+#endif
+
+#if defined(ARROW_R_WITH_DATASET)
 namespace ds = ::arrow::dataset;
+#endif
+
+namespace compute = ::arrow::compute;
 namespace fs = ::arrow::fs;
 
 SEXP ChunkedArray__as_vector(const std::shared_ptr<arrow::ChunkedArray>& chunked_array);
@@ -168,13 +179,16 @@ R6_CLASS_NAME(arrow::csv::ReadOptions, "CsvReadOptions");
 R6_CLASS_NAME(arrow::csv::ParseOptions, "CsvParseOptions");
 R6_CLASS_NAME(arrow::csv::ConvertOptions, "CsvConvertOptions");
 R6_CLASS_NAME(arrow::csv::TableReader, "CsvTableReader");
+R6_CLASS_NAME(arrow::csv::WriteOptions, "CsvWriteOptions");
 
+#if defined(ARROW_R_WITH_PARQUET)
 R6_CLASS_NAME(parquet::ArrowReaderProperties, "ParquetArrowReaderProperties");
 R6_CLASS_NAME(parquet::ArrowWriterProperties, "ParquetArrowWriterProperties");
 R6_CLASS_NAME(parquet::WriterProperties, "ParquetWriterProperties");
 R6_CLASS_NAME(parquet::arrow::FileReader, "ParquetFileReader");
 R6_CLASS_NAME(parquet::WriterPropertiesBuilder, "ParquetWriterPropertiesBuilder");
 R6_CLASS_NAME(parquet::arrow::FileWriter, "ParquetFileWriter");
+#endif
 
 R6_CLASS_NAME(arrow::ipc::feather::Reader, "FeatherReader");
 
@@ -206,6 +220,8 @@ struct r6_class_name<arrow::DataType> {
   static const char* get(const std::shared_ptr<arrow::DataType>&);
 };
 
+#if defined(ARROW_R_WITH_DATASET)
+
 template <>
 struct r6_class_name<ds::Dataset> {
   static const char* get(const std::shared_ptr<ds::Dataset>&);
@@ -215,6 +231,8 @@ template <>
 struct r6_class_name<ds::FileFormat> {
   static const char* get(const std::shared_ptr<ds::FileFormat>&);
 };
+
+#endif
 
 }  // namespace cpp11
 

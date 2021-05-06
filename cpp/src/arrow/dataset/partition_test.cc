@@ -46,17 +46,17 @@ class TestPartitioning : public ::testing::Test {
     ASSERT_RAISES(Invalid, partitioning_->Parse(path));
   }
 
-  void AssertParse(const std::string& path, Expression expected) {
+  void AssertParse(const std::string& path, compute::Expression expected) {
     ASSERT_OK_AND_ASSIGN(auto parsed, partitioning_->Parse(path));
     ASSERT_EQ(parsed, expected);
   }
 
   template <StatusCode code = StatusCode::Invalid>
-  void AssertFormatError(Expression expr) {
+  void AssertFormatError(compute::Expression expr) {
     ASSERT_EQ(partitioning_->Format(expr).status().code(), code);
   }
 
-  void AssertFormat(Expression expr, const std::string& expected) {
+  void AssertFormat(compute::Expression expr, const std::string& expected) {
     // formatted partition expressions are bound to the schema of the dataset being
     // written
     ASSERT_OK_AND_ASSIGN(auto formatted, partitioning_->Format(expr));
@@ -64,7 +64,8 @@ class TestPartitioning : public ::testing::Test {
 
     // ensure the formatted path round trips the relevant components of the partition
     // expression: roundtripped should be a subset of expr
-    ASSERT_OK_AND_ASSIGN(Expression roundtripped, partitioning_->Parse(formatted));
+    ASSERT_OK_AND_ASSIGN(compute::Expression roundtripped,
+                         partitioning_->Parse(formatted));
 
     ASSERT_OK_AND_ASSIGN(roundtripped, roundtripped.Bind(*written_schema_));
     ASSERT_OK_AND_ASSIGN(auto simplified, SimplifyWithGuarantee(roundtripped, expr));
@@ -81,7 +82,7 @@ class TestPartitioning : public ::testing::Test {
   void AssertPartition(const std::shared_ptr<Partitioning> partitioning,
                        const std::shared_ptr<RecordBatch> full_batch,
                        const RecordBatchVector& expected_batches,
-                       const std::vector<Expression>& expected_expressions) {
+                       const std::vector<compute::Expression>& expected_expressions) {
     ASSERT_OK_AND_ASSIGN(auto partition_results, partitioning->Partition(full_batch));
     std::shared_ptr<RecordBatch> rest = full_batch;
     ASSERT_EQ(partition_results.batches.size(), expected_batches.size());
@@ -91,7 +92,8 @@ class TestPartitioning : public ::testing::Test {
       std::shared_ptr<RecordBatch> actual_batch =
           partition_results.batches[partition_index];
       AssertBatchesEqual(*expected_batches[partition_index], *actual_batch);
-      Expression actual_expression = partition_results.expressions[partition_index];
+      compute::Expression actual_expression =
+          partition_results.expressions[partition_index];
       ASSERT_EQ(expected_expressions[partition_index], actual_expression);
     }
   }
@@ -101,7 +103,7 @@ class TestPartitioning : public ::testing::Test {
                        const std::string& record_batch_json,
                        const std::shared_ptr<Schema> partitioned_schema,
                        const std::vector<std::string>& expected_record_batch_strs,
-                       const std::vector<Expression>& expected_expressions) {
+                       const std::vector<compute::Expression>& expected_expressions) {
     auto record_batch = RecordBatchFromJSON(schema, record_batch_json);
     RecordBatchVector expected_batches;
     for (const auto& expected_record_batch_str : expected_record_batch_strs) {
@@ -138,9 +140,13 @@ class TestPartitioning : public ::testing::Test {
 };
 
 TEST_F(TestPartitioning, Partition) {
+  auto dataset_schema =
+      schema({field("a", int32()), field("b", utf8()), field("c", uint32())});
+
   auto partition_schema = schema({field("a", int32()), field("b", utf8())});
-  auto schema_ = schema({field("a", int32()), field("b", utf8()), field("c", uint32())});
-  auto remaining_schema = schema({field("c", uint32())});
+
+  auto physical_schema = schema({field("c", uint32())});
+
   auto partitioning = std::make_shared<DirectoryPartitioning>(partition_schema);
   std::string json = R"([{"a": 3,    "b": "x",  "c": 0},
                          {"a": 3,    "b": "x",  "c": 1},
@@ -149,15 +155,22 @@ TEST_F(TestPartitioning, Partition) {
                          {"a": null, "b": "z",  "c": 4},
                          {"a": null, "b": null, "c": 5}
                        ])";
-  std::vector<std::string> expected_batches = {R"([{"c": 0}, {"c": 1}])", R"([{"c": 2}])",
-                                               R"([{"c": 3}, {"c": 5}])",
-                                               R"([{"c": 4}])"};
-  std::vector<Expression> expected_expressions = {
+
+  std::vector<std::string> expected_batches = {
+      R"([{"c": 0}, {"c": 1}])",
+      R"([{"c": 2}])",
+      R"([{"c": 3}, {"c": 5}])",
+      R"([{"c": 4}])",
+  };
+
+  std::vector<compute::Expression> expected_expressions = {
       and_(equal(field_ref("a"), literal(3)), equal(field_ref("b"), literal("x"))),
       and_(equal(field_ref("a"), literal(1)), is_null(field_ref("b"))),
       and_(is_null(field_ref("a")), is_null(field_ref("b"))),
-      and_(is_null(field_ref("a")), equal(field_ref("b"), literal("z")))};
-  AssertPartition(partitioning, schema_, json, remaining_schema, expected_batches,
+      and_(is_null(field_ref("a")), equal(field_ref("b"), literal("z"))),
+  };
+
+  AssertPartition(partitioning, dataset_schema, json, physical_schema, expected_batches,
                   expected_expressions);
 }
 
@@ -222,6 +235,19 @@ TEST_F(TestPartitioning, DirectoryPartitioningFormatDictionary) {
   written_schema_ = partitioning_->schema();
 
   ASSERT_OK_AND_ASSIGN(auto dict_hello, MakeScalar("hello")->CastTo(DictStr("")->type()));
+  AssertFormat(equal(field_ref("alpha"), literal(dict_hello)), "hello");
+}
+
+TEST_F(TestPartitioning, DirectoryPartitioningFormatDictionaryCustomIndex) {
+  // Make sure a non-int32 index type is properly cast to, else we fail a CHECK when
+  // we construct a dictionary array with the wrong index type
+  auto dict_type = dictionary(int8(), utf8());
+  auto dictionary = ArrayFromJSON(utf8(), R"(["hello", "world"])");
+  partitioning_ = std::make_shared<DirectoryPartitioning>(
+      schema({field("alpha", dict_type)}), ArrayVector{dictionary});
+  written_schema_ = partitioning_->schema();
+
+  ASSERT_OK_AND_ASSIGN(auto dict_hello, MakeScalar("hello")->CastTo(dict_type));
   AssertFormat(equal(field_ref("alpha"), literal(dict_hello)), "hello");
 }
 
@@ -464,6 +490,67 @@ TEST_F(TestPartitioning, HiveDictionaryHasUniqueValues) {
   AssertParseError("/alpha=yosemite");  // not in inspected dictionary
 }
 
+TEST_F(TestPartitioning, ExistingSchemaDirectory) {
+  // Infer dictionary values but with a given schema
+  auto dict_type = dictionary(int8(), utf8());
+  PartitioningFactoryOptions options;
+  options.schema = schema({field("alpha", int64()), field("beta", dict_type)});
+  factory_ = DirectoryPartitioning::MakeFactory({"alpha", "beta"}, options);
+
+  AssertInspect({"/0/1"}, options.schema->fields());
+  AssertInspect({"/0/1/what"}, options.schema->fields());
+
+  // fail if any segment is not parseable as schema type
+  EXPECT_RAISES_WITH_MESSAGE_THAT(Invalid, ::testing::HasSubstr("Failed to parse string"),
+                                  factory_->Inspect({"/0/1", "/hello/1"}));
+  factory_ = DirectoryPartitioning::MakeFactory({"alpha", "beta"}, options);
+
+  // Now we don't fail since our type is large enough
+  AssertInspect({"/3760212050/1"}, options.schema->fields());
+  // If there are still too many digits, fail
+  EXPECT_RAISES_WITH_MESSAGE_THAT(Invalid, ::testing::HasSubstr("Failed to parse string"),
+                                  factory_->Inspect({"/1038581385102940193760212050/1"}));
+  factory_ = DirectoryPartitioning::MakeFactory({"alpha", "beta"}, options);
+
+  AssertInspect({"/0/1", "/2"}, options.schema->fields());
+}
+
+TEST_F(TestPartitioning, ExistingSchemaHive) {
+  // Infer dictionary values but with a given schema
+  auto dict_type = dictionary(int8(), utf8());
+  HivePartitioningFactoryOptions options;
+  options.schema = schema({field("a", int64()), field("b", dict_type)});
+  factory_ = HivePartitioning::MakeFactory(options);
+
+  AssertInspect({"/a=0/b=1"}, options.schema->fields());
+  AssertInspect({"/a=0/b=1/what"}, options.schema->fields());
+  AssertInspect({"/a=0", "/b=1"}, options.schema->fields());
+
+  // fail if any segment for field alpha is not parseable as schema type
+  EXPECT_RAISES_WITH_MESSAGE_THAT(
+      Invalid,
+      ::testing::HasSubstr(
+          "Could not cast segments for partition field a to requested type int64"),
+      factory_->Inspect({"/a=0/b=1", "/a=hello/b=1"}));
+  factory_ = HivePartitioning::MakeFactory(options);
+
+  EXPECT_RAISES_WITH_MESSAGE_THAT(
+      Invalid,
+      ::testing::HasSubstr("Requested schema has 2 fields, but only 1 were detected"),
+      factory_->Inspect({"/a=0", "/a=hello"}));
+  factory_ = HivePartitioning::MakeFactory(options);
+
+  // Now we don't fail since our type is large enough
+  AssertInspect({"/a=3760212050/b=1"}, options.schema->fields());
+  // If there are still too many digits, fail
+  EXPECT_RAISES_WITH_MESSAGE_THAT(
+      Invalid, ::testing::HasSubstr("Failed to parse string"),
+      factory_->Inspect({"/a=1038581385102940193760212050/b=1"}));
+  factory_ = HivePartitioning::MakeFactory(options);
+
+  AssertInspect({"/a=0/b=1", "/b=2"}, options.schema->fields());
+}
+
 TEST_F(TestPartitioning, EtlThenHive) {
   FieldVector etl_fields{field("year", int16()), field("month", int8()),
                          field("day", int8()), field("hour", int8())};
@@ -477,7 +564,7 @@ TEST_F(TestPartitioning, EtlThenHive) {
               field("hour", int8()), field("alpha", int32()), field("beta", float32())});
 
   partitioning_ = std::make_shared<FunctionPartitioning>(
-      schm, [&](const std::string& path) -> Result<Expression> {
+      schm, [&](const std::string& path) -> Result<compute::Expression> {
         auto segments = fs::internal::SplitAbstractPath(path);
         if (segments.size() < etl_fields.size() + alphabeta_fields.size()) {
           return Status::Invalid("path ", path, " can't be parsed");
@@ -519,8 +606,8 @@ TEST_F(TestPartitioning, Set) {
   // An adhoc partitioning which parses segments like "/x in [1 4 5]"
   // into (field_ref("x") == 1 or field_ref("x") == 4 or field_ref("x") == 5)
   partitioning_ = std::make_shared<FunctionPartitioning>(
-      schm, [&](const std::string& path) -> Result<Expression> {
-        std::vector<Expression> subexpressions;
+      schm, [&](const std::string& path) -> Result<compute::Expression> {
+        std::vector<compute::Expression> subexpressions;
         for (auto segment : fs::internal::SplitAbstractPath(path)) {
           std::smatch matches;
 
@@ -558,8 +645,8 @@ class RangePartitioning : public Partitioning {
 
   std::string type_name() const override { return "range"; }
 
-  Result<Expression> Parse(const std::string& path) const override {
-    std::vector<Expression> ranges;
+  Result<compute::Expression> Parse(const std::string& path) const override {
+    std::vector<compute::Expression> ranges;
 
     for (auto segment : fs::internal::SplitAbstractPath(path)) {
       auto key = HivePartitioning::ParseKey(segment, "");
@@ -603,7 +690,7 @@ class RangePartitioning : public Partitioning {
     return Status::OK();
   }
 
-  Result<std::string> Format(const Expression&) const override { return ""; }
+  Result<std::string> Format(const compute::Expression&) const override { return ""; }
   Result<PartitionedBatches> Partition(
       const std::shared_ptr<RecordBatch>&) const override {
     return Status::OK();
@@ -637,133 +724,6 @@ TEST(TestStripPrefixAndFilename, Basic) {
   EXPECT_THAT(StripPrefixAndFilename(input, "/data"),
               testing::ElementsAre("year=2019", "year=2019/month=12",
                                    "year=2019/month=12/day=01"));
-}
-
-void AssertGrouping(const FieldVector& by_fields, const std::string& batch_json,
-                    const std::string& expected_json) {
-  FieldVector fields_with_ids = by_fields;
-  fields_with_ids.push_back(field("ids", list(int32())));
-  auto expected = ArrayFromJSON(struct_(fields_with_ids), expected_json);
-
-  FieldVector fields_with_id = by_fields;
-  fields_with_id.push_back(field("id", int32()));
-  auto batch = RecordBatchFromJSON(schema(fields_with_id), batch_json);
-
-  ASSERT_OK_AND_ASSIGN(auto by, batch->RemoveColumn(batch->num_columns() - 1)
-                                    .Map([](std::shared_ptr<RecordBatch> by) {
-                                      return by->ToStructArray();
-                                    }));
-
-  ASSERT_OK_AND_ASSIGN(auto groupings_and_values, MakeGroupings(*by));
-  ASSERT_OK(groupings_and_values->ValidateFull());
-
-  auto groupings =
-      checked_pointer_cast<ListArray>(groupings_and_values->GetFieldByName("groupings"));
-
-  ASSERT_OK_AND_ASSIGN(std::shared_ptr<Array> grouped_ids,
-                       ApplyGroupings(*groupings, *batch->GetColumnByName("id")));
-  ASSERT_OK(grouped_ids->ValidateFull());
-
-  ArrayVector columns =
-      checked_cast<const StructArray&>(*groupings_and_values->GetFieldByName("values"))
-          .fields();
-  columns.push_back(grouped_ids);
-
-  ASSERT_OK_AND_ASSIGN(auto actual, StructArray::Make(columns, fields_with_ids));
-  ASSERT_OK(actual->ValidateFull());
-
-  AssertArraysEqual(*expected, *actual, /*verbose=*/true);
-}
-
-TEST(GroupTest, Basics) {
-  AssertGrouping({field("a", utf8()), field("b", int32())}, R"([
-    {"a": "ex",  "b": 0, "id": 0},
-    {"a": "ex",  "b": 0, "id": 1},
-    {"a": "why", "b": 0, "id": 2},
-    {"a": "ex",  "b": 1, "id": 3},
-    {"a": "why", "b": 0, "id": 4},
-    {"a": "ex",  "b": 1, "id": 5},
-    {"a": "ex",  "b": 0, "id": 6},
-    {"a": "why", "b": 1, "id": 7}
-  ])",
-                 R"([
-    {"a": "ex",  "b": 0, "ids": [0, 1, 6]},
-    {"a": "why", "b": 0, "ids": [2, 4]},
-    {"a": "ex",  "b": 1, "ids": [3, 5]},
-    {"a": "why", "b": 1, "ids": [7]}
-  ])");
-}
-
-TEST(GroupTest, WithNulls) {
-  AssertGrouping({field("a", utf8()), field("b", int32())},
-                 R"([
-                   {"a": "ex",  "b": 0,    "id": 0},
-                   {"a": null,  "b": 0,    "id": 1},
-                   {"a": null,  "b": 0,    "id": 2},
-                   {"a": "ex",  "b": 1,    "id": 3},
-                   {"a": null,  "b": null, "id": 4},
-                   {"a": "ex",  "b": 1,    "id": 5},
-                   {"a": "ex",  "b": 0,    "id": 6},
-                   {"a": "why", "b": null, "id": 7}
-                 ])",
-                 R"([
-                   {"a": "ex", "b": 0, "ids": [0, 6]},
-                   {"a": null, "b": 0, "ids": [1, 2]},
-                   {"a": "ex", "b": 1, "ids": [3, 5]},
-                   {"a": null, "b": null, "ids": [4]},
-                   {"a": "why", "b": null, "ids": [7]}
-  ])");
-
-  AssertGrouping({field("a", dictionary(int32(), utf8())), field("b", int32())},
-                 R"([
-                   {"a": "ex",  "b": 0,    "id": 0},
-                   {"a": null,  "b": 0,    "id": 1},
-                   {"a": null,  "b": 0,    "id": 2},
-                   {"a": "ex",  "b": 1,    "id": 3},
-                   {"a": null,  "b": null, "id": 4},
-                   {"a": "ex",  "b": 1,    "id": 5},
-                   {"a": "ex",  "b": 0,    "id": 6},
-                   {"a": "why", "b": null, "id": 7}
-                 ])",
-                 R"([
-                   {"a": "ex", "b": 0, "ids": [0, 6]},
-                   {"a": null, "b": 0, "ids": [1, 2]},
-                   {"a": "ex", "b": 1, "ids": [3, 5]},
-                   {"a": null, "b": null, "ids": [4]},
-                   {"a": "why", "b": null, "ids": [7]}
-  ])");
-
-  auto has_nulls = checked_pointer_cast<StructArray>(
-      ArrayFromJSON(struct_({field("a", utf8()), field("b", int32())}), R"([
-    {"a": "ex",  "b": 0},
-    null,
-    {"a": "why", "b": 0},
-    {"a": "ex",  "b": 1},
-    {"a": "why", "b": 0},
-    {"a": "ex",  "b": 1},
-    {"a": "ex",  "b": 0},
-    null
-  ])"));
-  ASSERT_RAISES(Invalid, MakeGroupings(*has_nulls));
-}
-
-TEST(GroupTest, GroupOnDictionary) {
-  AssertGrouping({field("a", dictionary(int32(), utf8())), field("b", int32())}, R"([
-    {"a": "ex",  "b": 0, "id": 0},
-    {"a": "ex",  "b": 0, "id": 1},
-    {"a": "why", "b": 0, "id": 2},
-    {"a": "ex",  "b": 1, "id": 3},
-    {"a": "why", "b": 0, "id": 4},
-    {"a": "ex",  "b": 1, "id": 5},
-    {"a": "ex",  "b": 0, "id": 6},
-    {"a": "why", "b": 1, "id": 7}
-  ])",
-                 R"([
-    {"a": "ex",  "b": 0, "ids": [0, 1, 6]},
-    {"a": "why", "b": 0, "ids": [2, 4]},
-    {"a": "ex",  "b": 1, "ids": [3, 5]},
-    {"a": "why", "b": 1, "ids": [7]}
-  ])");
 }
 
 }  // namespace dataset

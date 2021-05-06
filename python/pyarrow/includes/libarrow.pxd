@@ -1130,6 +1130,21 @@ ctypedef void CallbackTransform(
     object, const shared_ptr[CBuffer]& src, shared_ptr[CBuffer]* dest)
 
 
+cdef extern from "arrow/util/cancel.h" namespace "arrow" nogil:
+    cdef cppclass CStopToken "arrow::StopToken":
+        CStatus Poll()
+        c_bool IsStopRequested()
+
+    cdef cppclass CStopSource "arrow::StopSource":
+        CStopToken token()
+
+    CResult[CStopSource*] SetSignalStopSource()
+    void ResetSignalStopSource()
+
+    CStatus RegisterCancellingSignalHandler(vector[int] signals)
+    void UnregisterCancellingSignalHandler()
+
+
 cdef extern from "arrow/io/api.h" namespace "arrow::io" nogil:
     enum FileMode" arrow::io::FileMode::type":
         FileMode_READ" arrow::io::FileMode::READ"
@@ -1142,7 +1157,9 @@ cdef extern from "arrow/io/api.h" namespace "arrow::io" nogil:
 
     cdef cppclass CIOContext" arrow::io::IOContext":
         CIOContext()
+        CIOContext(CStopToken)
         CIOContext(CMemoryPool*)
+        CIOContext(CMemoryPool*, CStopToken)
 
     CIOContext c_default_io_context "arrow::io::default_io_context"()
 
@@ -1541,30 +1558,6 @@ cdef extern from "arrow/ipc/api.h" namespace "arrow::ipc" nogil:
             const CIpcWriteOptions& options,
             CIpcPayload* out)
 
-    int kFeatherV1Version" arrow::ipc::feather::kFeatherV1Version"
-    int kFeatherV2Version" arrow::ipc::feather::kFeatherV2Version"
-
-    cdef cppclass CFeatherProperties" arrow::ipc::feather::WriteProperties":
-        int version
-        int chunksize
-        CCompressionType compression
-        int compression_level
-
-    CStatus WriteFeather" arrow::ipc::feather::WriteTable"\
-        (const CTable& table, COutputStream* out,
-         CFeatherProperties properties)
-
-    cdef cppclass CFeatherReader" arrow::ipc::feather::Reader":
-        @staticmethod
-        CResult[shared_ptr[CFeatherReader]] Open(
-            const shared_ptr[CRandomAccessFile]& file)
-        int version()
-        shared_ptr[CSchema] schema()
-
-        CStatus Read(shared_ptr[CTable]* out)
-        CStatus Read(const vector[int] indices, shared_ptr[CTable]* out)
-        CStatus Read(const vector[c_string] names, shared_ptr[CTable]* out)
-
 
 cdef extern from 'arrow/util/value_parsing.h' namespace 'arrow' nogil:
     cdef cppclass CTimestampParser" arrow::TimestampParser":
@@ -1590,6 +1583,9 @@ cdef extern from "arrow/csv/api.h" namespace "arrow::csv" nogil:
         c_bool newlines_in_values
         c_bool ignore_empty_lines
 
+        CCSVParseOptions()
+        CCSVParseOptions(CCSVParseOptions&&)
+
         @staticmethod
         CCSVParseOptions Defaults()
 
@@ -1608,6 +1604,9 @@ cdef extern from "arrow/csv/api.h" namespace "arrow::csv" nogil:
         vector[c_string] include_columns
         c_bool include_missing_columns
 
+        CCSVConvertOptions()
+        CCSVConvertOptions(CCSVConvertOptions&&)
+
         @staticmethod
         CCSVConvertOptions Defaults()
 
@@ -1617,6 +1616,9 @@ cdef extern from "arrow/csv/api.h" namespace "arrow::csv" nogil:
         int32_t skip_rows
         vector[c_string] column_names
         c_bool autogenerate_column_names
+
+        CCSVReadOptions()
+        CCSVReadOptions(CCSVReadOptions&&)
 
         @staticmethod
         CCSVReadOptions Defaults()
@@ -1640,7 +1642,7 @@ cdef extern from "arrow/csv/api.h" namespace "arrow::csv" nogil:
             CRecordBatchReader):
         @staticmethod
         CResult[shared_ptr[CCSVStreamingReader]] Make(
-            CMemoryPool*, shared_ptr[CInputStream],
+            CIOContext, shared_ptr[CInputStream],
             CCSVReadOptions, CCSVParseOptions, CCSVConvertOptions)
 
     cdef CStatus WriteCSV(
@@ -1712,6 +1714,10 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
             " arrow::compute::ScalarAggregateKernel"(CKernel):
         pass
 
+    cdef cppclass CHashAggregateKernel \
+            " arrow::compute::HashAggregateKernel"(CKernel):
+        pass
+
     cdef cppclass CArity" arrow::compute::Arity":
         int num_args
         c_bool is_varargs
@@ -1721,6 +1727,8 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
         FunctionKind_VECTOR" arrow::compute::Function::VECTOR"
         FunctionKind_SCALAR_AGGREGATE \
             " arrow::compute::Function::SCALAR_AGGREGATE"
+        FunctionKind_HASH_AGGREGATE \
+            " arrow::compute::Function::HASH_AGGREGATE"
         FunctionKind_META \
             " arrow::compute::Function::META"
 
@@ -1754,6 +1762,11 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
             (CFunction):
         vector[const CScalarAggregateKernel*] kernels() const
 
+    cdef cppclass CHashAggregateFunction\
+            " arrow::compute::HashAggregateFunction"\
+            (CFunction):
+        vector[const CHashAggregateKernel*] kernels() const
+
     cdef cppclass CMetaFunction" arrow::compute::MetaFunction"(CFunction):
         pass
 
@@ -1785,6 +1798,19 @@ cdef extern from "arrow/compute/api.h" namespace "arrow::compute" nogil:
             "arrow::compute::SplitPatternOptions"(CSplitOptions):
         CSplitPatternOptions(c_string pattern, int64_t max_splits,
                              c_bool reverse)
+        c_string pattern
+
+    cdef cppclass CReplaceSubstringOptions \
+            "arrow::compute::ReplaceSubstringOptions"(CFunctionOptions):
+        CReplaceSubstringOptions(c_string pattern, c_string replacement,
+                                 int64_t max_replacements)
+        c_string pattern
+        c_string replacement
+        int64_t max_replacements
+
+    cdef cppclass CExtractRegexOptions \
+            "arrow::compute::ExtractRegexOptions"(CFunctionOptions):
+        CExtractRegexOptions(c_string pattern)
         c_string pattern
 
     cdef cppclass CCastOptions" arrow::compute::CastOptions"(CFunctionOptions):
@@ -2107,6 +2133,7 @@ cdef extern from "arrow/python/api.h" namespace "arrow::py" nogil:
         c_bool safe_cast
         c_bool split_blocks
         c_bool self_destruct
+        c_bool decode_dictionaries
         unordered_set[c_string] categorical_columns
         unordered_set[c_string] extension_columns
 
@@ -2256,6 +2283,11 @@ cdef extern from 'arrow/util/compression.h' namespace 'arrow' nogil:
 cdef extern from 'arrow/util/io_util.h' namespace 'arrow::internal' nogil:
     int ErrnoFromStatus(CStatus status)
     int WinErrorFromStatus(CStatus status)
+    int SignalFromStatus(CStatus status)
+
+    CStatus SendSignal(int signum)
+    CStatus SendSignalToThread(int signum, uint64_t thread_id)
+
 
 cdef extern from 'arrow/util/iterator.h' namespace 'arrow' nogil:
     cdef cppclass CIterator" arrow::Iterator"[T]:
